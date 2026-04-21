@@ -22,5 +22,8 @@
     <string name="play_media">Плей</string>
     <string name="pause_media">Пауза</string>
     <string name="seek_forward">Вперед 10с</string>
+    <string name="enter_fullscreen">Во весь экран</string>
+    <string name="exit_fullscreen">Выйти из полного экрана</string>
+    <string name="player_loading">Подключение медиаплеера…</string>
     <string name="popular_formats">Поддержка популярных форматов: MP3, AAC, WAV, MP4, MKV, WebM и других, совместимых с ExoPlayer</string>
 </resources>

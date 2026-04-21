@@ -1,10 +1,9 @@
 package com.example.mediaplayer
 
-import android.content.ContentResolver
-import android.content.Intent
-import android.net.Uri
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,182 +36,97 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import kotlinx.coroutines.delay
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.example.mediaplayer.ui.theme.MediaplayerTheme
 
 class MainActivity : ComponentActivity() {
+    private val playerViewModel: PlayerViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
             MediaplayerTheme {
-                PlayerApp()
+                PlayerApp(viewModel = playerViewModel)
             }
         }
     }
 }
 
 @Composable
-private fun PlayerApp() {
-    val context = LocalContext.current
-    val player = remember(context) {
-        ExoPlayer.Builder(context)
-            .setSeekBackIncrementMs(10_000)
-            .setSeekForwardIncrementMs(10_000)
-            .build().apply {
-            playWhenReady = true
-        }
-    }
-    var playlist by remember { mutableStateOf<List<PlaylistItem>>(emptyList()) }
-    var playbackState by remember { mutableStateOf(Player.STATE_IDLE) }
-    var durationMs by remember { mutableLongStateOf(C.TIME_UNSET) }
-    var hasVideo by remember { mutableStateOf(false) }
-    var currentIndex by remember { mutableStateOf(0) }
-    var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var isSeeking by remember { mutableStateOf(false) }
-    var sliderPositionMs by remember { mutableFloatStateOf(0f) }
-    var isPlaying by remember { mutableStateOf(false) }
-
+private fun PlayerApp(viewModel: PlayerViewModel) {
+    val uiState by viewModel.uiState.collectAsState()
     val openDocument = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
-            val item = context.contentResolver.toPlaylistItem(uri)
-            playlist = listOf(item)
-            player.setMediaItem(MediaItem.fromUri(uri))
-            player.prepare()
-            player.play()
+            viewModel.openSingle(uri)
         }
     }
     val openMultipleDocuments = rememberLauncherForActivityResult(OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) {
-            val items = uris.map { context.contentResolver.toPlaylistItem(it) }
-            playlist = items
-            currentIndex = 0
-            player.setMediaItems(items.map { MediaItem.fromUri(it.uri) })
-            player.prepare()
-            player.play()
-        }
+        viewModel.openPlaylist(uris)
     }
+    val fullscreenEnabled = uiState.isFullscreen && uiState.currentItem != null
 
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                playbackState = state
-                durationMs = player.duration
+    ApplyFullscreenMode(enabled = fullscreenEnabled)
+
+    if (fullscreenEnabled) {
+        FullscreenPlayerScreen(
+            player = viewModel.player,
+            uiState = uiState,
+            onSeekStart = viewModel::onSeekStart,
+            onSeekChange = viewModel::onSeekChange,
+            onSeekFinish = viewModel::onSeekFinish,
+            onSeekBack = viewModel::seekBack,
+            onTogglePlayPause = viewModel::togglePlayPause,
+            onSeekForward = viewModel::seekForward,
+            onExitFullscreen = viewModel::exitFullscreen
+        )
+    } else {
+        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                MediaPlayerScreen(
+                    player = viewModel.player,
+                    uiState = uiState,
+                    onOpenFile = { openDocument.launch(arrayOf("audio/*", "video/*")) },
+                    onOpenFiles = { openMultipleDocuments.launch(arrayOf("audio/*", "video/*")) },
+                    onSeekStart = viewModel::onSeekStart,
+                    onSeekChange = viewModel::onSeekChange,
+                    onSeekFinish = viewModel::onSeekFinish,
+                    onSeekBack = viewModel::seekBack,
+                    onTogglePlayPause = viewModel::togglePlayPause,
+                    onSeekForward = viewModel::seekForward,
+                    onToggleFullscreen = viewModel::toggleFullscreen,
+                    onSelectTrack = viewModel::selectTrack
+                )
             }
-
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-            }
-
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                currentIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-                durationMs = player.duration
-                currentPositionMs = player.currentPosition
-            }
-
-            override fun onEvents(player: Player, events: Player.Events) {
-                durationMs = player.duration
-                currentPositionMs = player.currentPosition
-                hasVideo = player.videoSize.width > 0 && player.videoSize.height > 0
-                currentIndex = player.currentMediaItemIndex.coerceAtLeast(0)
-                isPlaying = player.isPlaying
-            }
-        }
-        player.addListener(listener)
-        onDispose {
-            player.removeListener(listener)
-            player.release()
-        }
-    }
-
-    LaunchedEffect(player, isSeeking) {
-        while (true) {
-            if (!isSeeking) {
-                currentPositionMs = player.currentPosition
-                durationMs = player.duration
-                sliderPositionMs = player.currentPosition.toFloat()
-            }
-            delay(500)
-        }
-    }
-
-    Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            MediaPlayerScreen(
-                player = player,
-                playlist = playlist,
-                currentIndex = currentIndex,
-                playbackState = playbackState,
-                durationMs = durationMs,
-                currentPositionMs = currentPositionMs,
-                sliderPositionMs = sliderPositionMs,
-                isPlaying = isPlaying,
-                hasVideo = hasVideo,
-                onOpenFile = { openDocument.launch(arrayOf("audio/*", "video/*")) },
-                onOpenFiles = { openMultipleDocuments.launch(arrayOf("audio/*", "video/*")) },
-                onSeekStart = { isSeeking = true },
-                onSeekChange = { sliderPositionMs = it },
-                onSeekFinish = {
-                    player.seekTo(it.toLong())
-                    currentPositionMs = it.toLong()
-                    sliderPositionMs = it
-                    isSeeking = false
-                },
-                onSeekBack = { player.seekBack() },
-                onTogglePlayPause = {
-                    if (player.isPlaying) {
-                        player.pause()
-                    } else {
-                        player.play()
-                    }
-                },
-                onSeekForward = { player.seekForward() },
-                onSelectTrack = { index ->
-                    currentIndex = index
-                    player.seekTo(index, 0L)
-                    player.play()
-                }
-            )
         }
     }
 }
 
 @Composable
 private fun MediaPlayerScreen(
-    player: ExoPlayer,
-    playlist: List<PlaylistItem>,
-    currentIndex: Int,
-    playbackState: Int,
-    durationMs: Long,
-    currentPositionMs: Long,
-    sliderPositionMs: Float,
-    isPlaying: Boolean,
-    hasVideo: Boolean,
+    player: Player?,
+    uiState: PlayerUiState,
     onOpenFile: () -> Unit,
     onOpenFiles: () -> Unit,
     onSeekStart: () -> Unit,
@@ -220,9 +135,10 @@ private fun MediaPlayerScreen(
     onSeekBack: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekForward: () -> Unit,
+    onToggleFullscreen: () -> Unit,
     onSelectTrack: (Int) -> Unit
 ) {
-    val currentItem = playlist.getOrNull(currentIndex)
+    val currentItem = uiState.currentItem
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -241,6 +157,14 @@ private fun MediaPlayerScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        if (uiState.errorMessage != null) {
+            Text(
+                text = uiState.errorMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -249,36 +173,35 @@ private fun MediaPlayerScreen(
             Column(modifier = Modifier.padding(16.dp)) {
                 if (currentItem == null) {
                     EmptyPlayerState(
+                        isControllerReady = uiState.isControllerReady,
                         onOpenFile = onOpenFile,
                         onOpenFiles = onOpenFiles
                     )
                 } else {
-                    VideoSurface(player = player, hasVideo = hasVideo)
+                    InlinePlayerSurface(player = player, hasVideo = uiState.hasVideo)
                     Spacer(modifier = Modifier.height(16.dp))
                     SeekBarSection(
-                        durationMs = durationMs,
-                        currentPositionMs = currentPositionMs,
-                        sliderPositionMs = sliderPositionMs,
+                        durationMs = uiState.durationMs,
+                        currentPositionMs = uiState.currentPositionMs,
+                        sliderPositionMs = uiState.sliderPositionMs,
                         onSeekStart = onSeekStart,
                         onSeekChange = onSeekChange,
                         onSeekFinish = onSeekFinish
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     PlaybackControlsSection(
-                        isPlaying = isPlaying,
+                        isPlaying = uiState.isPlaying,
                         onSeekBack = onSeekBack,
                         onTogglePlayPause = onTogglePlayPause,
                         onSeekForward = onSeekForward
                     )
                     Spacer(modifier = Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = onOpenFile) {
-                            Text(text = stringResource(R.string.open_other_media))
-                        }
-                        Button(onClick = onOpenFiles) {
-                            Text(text = stringResource(R.string.open_playlist))
-                        }
-                    }
+                    FileActionsSection(
+                        hasVideo = uiState.hasVideo,
+                        onOpenFile = onOpenFile,
+                        onOpenFiles = onOpenFiles,
+                        onToggleFullscreen = onToggleFullscreen
+                    )
                 }
             }
         }
@@ -286,14 +209,14 @@ private fun MediaPlayerScreen(
         if (currentItem != null) {
             PlaybackInfoCard(
                 fileName = currentItem.name,
-                playbackState = playbackState,
-                durationMs = durationMs,
-                hasVideo = hasVideo,
-                currentPositionMs = currentPositionMs
+                playbackState = uiState.playbackState,
+                durationMs = uiState.durationMs,
+                hasVideo = uiState.hasVideo,
+                currentPositionMs = uiState.currentPositionMs
             )
             PlaylistCard(
-                playlist = playlist,
-                currentIndex = currentIndex,
+                playlist = uiState.playlist,
+                currentIndex = uiState.currentIndex,
                 onSelectTrack = onSelectTrack
             )
         }
@@ -301,13 +224,85 @@ private fun MediaPlayerScreen(
 }
 
 @Composable
+private fun FullscreenPlayerScreen(
+    player: Player?,
+    uiState: PlayerUiState,
+    onSeekStart: () -> Unit,
+    onSeekChange: (Float) -> Unit,
+    onSeekFinish: (Float) -> Unit,
+    onSeekBack: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeekForward: () -> Unit,
+    onExitFullscreen: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        PlayerSurface(
+            player = player,
+            hasVideo = uiState.hasVideo,
+            modifier = Modifier.fillMaxSize(),
+            useRoundedCorners = false
+        )
+
+        Text(
+            text = uiState.currentItem?.name.orEmpty(),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+                .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.68f))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            SeekBarSection(
+                durationMs = uiState.durationMs,
+                currentPositionMs = uiState.currentPositionMs,
+                sliderPositionMs = uiState.sliderPositionMs,
+                onSeekStart = onSeekStart,
+                onSeekChange = onSeekChange,
+                onSeekFinish = onSeekFinish
+            )
+            PlaybackControlsSection(
+                isPlaying = uiState.isPlaying,
+                onSeekBack = onSeekBack,
+                onTogglePlayPause = onTogglePlayPause,
+                onSeekForward = onSeekForward
+            )
+            Button(
+                onClick = onExitFullscreen,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(text = stringResource(R.string.exit_fullscreen))
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmptyPlayerState(
+    isControllerReady: Boolean,
     onOpenFile: () -> Unit,
     onOpenFiles: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            text = stringResource(R.string.no_media_selected),
+            text = if (isControllerReady) {
+                stringResource(R.string.no_media_selected)
+            } else {
+                stringResource(R.string.player_loading)
+            },
             style = MaterialTheme.typography.bodyLarge
         )
         Button(onClick = onOpenFile) {
@@ -392,37 +387,90 @@ private fun PlaybackControlsSection(
 }
 
 @Composable
-private fun VideoSurface(player: ExoPlayer, hasVideo: Boolean) {
-    Box(
+private fun FileActionsSection(
+    hasVideo: Boolean,
+    onOpenFile: () -> Unit,
+    onOpenFiles: () -> Unit,
+    onToggleFullscreen: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = onOpenFile,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = stringResource(R.string.open_other_media))
+        }
+        Button(
+            onClick = onOpenFiles,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = stringResource(R.string.open_playlist))
+        }
+        if (hasVideo) {
+            Button(
+                onClick = onToggleFullscreen,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(text = stringResource(R.string.enter_fullscreen))
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlinePlayerSurface(player: Player?, hasVideo: Boolean) {
+    PlayerSurface(
+        player = player,
+        hasVideo = hasVideo,
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(16f / 9f)
-            .background(
-                color = Color.Black,
-                shape = RoundedCornerShape(20.dp)
-            ),
+            .aspectRatio(16f / 9f),
+        useRoundedCorners = true
+    )
+}
+
+@Composable
+private fun PlayerSurface(
+    player: Player?,
+    hasVideo: Boolean,
+    modifier: Modifier = Modifier,
+    useRoundedCorners: Boolean
+) {
+    val shape = if (useRoundedCorners) RoundedCornerShape(20.dp) else RoundedCornerShape(0.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { context ->
-                PlayerView(context).apply {
-                    useController = true
-                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    layoutParams = FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT
-                    )
-                    this.player = player
+        if (player == null) {
+            Text(
+                text = stringResource(R.string.player_loading),
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White
+            )
+        } else {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    PlayerView(context).apply {
+                        useController = false
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        )
+                        this.player = player
+                    }
+                },
+                update = { view ->
+                    view.player = player
+                    view.defaultArtwork = null
                 }
-            },
-            update = { view ->
-                view.player = player
-                view.defaultArtwork = null
-            }
-        )
+            )
+        }
 
-        if (!hasVideo) {
+        if (player != null && !hasVideo) {
             Text(
                 text = stringResource(R.string.audio_mode),
                 style = MaterialTheme.typography.headlineSmall,
@@ -516,6 +564,40 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
+@Composable
+private fun ApplyFullscreenMode(enabled: Boolean) {
+    val context = LocalContext.current
+    val view = LocalView.current
+    DisposableEffect(enabled, view) {
+        val window = context.findActivity()?.window
+        if (window != null) {
+            WindowCompat.setDecorFitsSystemWindows(window, !enabled)
+            val controller = WindowCompat.getInsetsController(window, view)
+            if (enabled) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                controller.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+
+        onDispose {
+            if (window != null) {
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+                WindowCompat.getInsetsController(window, view)
+                    .show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 private fun Int.toReadableStatus(): String = when (this) {
     Player.STATE_BUFFERING -> "Загрузка"
     Player.STATE_READY -> "Готов"
@@ -533,34 +615,5 @@ private fun Long.formatDuration(): String {
         "%d:%02d:%02d".format(hours, minutes, seconds)
     } else {
         "%02d:%02d".format(minutes, seconds)
-    }
-}
-
-private data class PlaylistItem(
-    val uri: Uri,
-    val name: String
-)
-
-private fun ContentResolver.resolveDisplayName(uri: Uri): String {
-    query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-        val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        if (columnIndex >= 0 && cursor.moveToFirst()) {
-            return cursor.getString(columnIndex)
-        }
-    }
-    return uri.lastPathSegment ?: uri.toString()
-}
-
-private fun ContentResolver.toPlaylistItem(uri: Uri): PlaylistItem {
-    takePersistableReadPermissionSafely(uri)
-    return PlaylistItem(
-        uri = uri,
-        name = resolveDisplayName(uri)
-    )
-}
-
-private fun ContentResolver.takePersistableReadPermissionSafely(uri: Uri) {
-    runCatching {
-        takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 }
