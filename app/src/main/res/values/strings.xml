@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">Media Player</string>
+    <string name="open_media">Открыть файл</string>
+    <string name="open_playlist">Открыть плейлист</string>
+    <string name="open_other_media">Выбрать другой файл</string>
+    <string name="no_media_selected">Выберите аудио или видеофайл для воспроизведения</string>
+    <string name="selected_file">Файл</string>
+    <string name="playback_status">Статус</string>
+    <string name="playback_ready">Готов к воспроизведению</string>
+    <string name="playback_loading">Загрузка…</string>
+    <string name="playback_ended">Воспроизведение завершено</string>
+    <string name="playback_idle">Файл не загружен</string>
+    <string name="duration">Длительность</string>
+    <string name="unknown_duration">Неизвестно</string>
+    <string name="audio_mode">Аудио</string>
+    <string name="video_mode">Видео</string>
+    <string name="content_type">Тип</string>
+    <string name="current_position">Позиция</string>
+    <string name="playlist_title">Плейлист (%1$d)</string>
+    <string name="current_track_prefix">%1$d. ▶ %2$s</string>
+    <string name="seek_back">Назад 10с</string>
+    <string name="play_media">Плей</string>
+    <string name="pause_media">Пауза</string>
+    <string name="seek_forward">Вперед 10с</string>
+    <string name="popular_formats">Поддержка популярных форматов: MP3, AAC, WAV, MP4, MKV, WebM и других, совместимых с ExoPlayer</string>
+</resources>
